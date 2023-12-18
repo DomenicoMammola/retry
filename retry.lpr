@@ -16,7 +16,8 @@ uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, CustApp,
-  Process;
+  Process,
+  mLog, mLogPublishers;
 
 type
   TRetryApplicationOptions = record
@@ -24,7 +25,6 @@ type
     waitSeconds : integer;
     command : string;
   end;
-
 
   { TRetryApplication }
 
@@ -37,14 +37,20 @@ type
     procedure WriteHelp; virtual;
   end;
 
+
+var
+  logger : TmLog;
+
 { TRetryApplication }
 
 procedure TRetryApplication.DoRun;
 var
   tmpOpt : String;
-  tmpNum, i, exitCode : integer;
+  tmpNum, i : integer;
   options : TRetryApplicationOptions;
-  pr : TProcess;
+  pubFile : TmFilePublisher;
+  processStrings : TStringList;
+  executable, outputString : String;
 begin
   options.iteration:= 2;
   options.waitSeconds:=10;
@@ -74,43 +80,68 @@ begin
   if HasOption('c', 'command') then
     options.command := GetOptionValue('c', 'command');
 
+  if HasOption('f', 'logfile') then
+  begin
+    tmpOpt := GetOptionValue('f', 'logfile');
+    if tmpOpt <> '' then
+    begin
+      pubFile := TmFilePublisher.Create;
+      pubFile.FileName:= tmpOpt;
+      pubFile.CycleEveryDay:= true;
+      pubFile.KeepDays:= 5;
+      pubFile.CurrentLevel:= mlInfo;
+      logManager.AddPublisher(pubFile, true);
+      pubFile.Active:= true;
+    end;
+  end;
 
   if options.command = '' then
   begin
     Writeln('No command is defined. Unable to run.');
+    logger.Error('No command is defined. Unable to run.');
     Terminate(1);
     Exit;
   end;
 
-  for i := 1 to options.iteration do
-  begin
-    pr := TProcess.Create(nil);
-    try
-      // yes, it's deprecated but it implements a smart "ConvertCommandLine" procedure that I don't want to replicate here
-      // as however I don't know which kind of command string would be used.. so avoid code replication!
-      pr.CommandLine:= options.command;
-      pr.Execute;
-      exitCode:= pr.ExitStatus;
-    finally
-      pr.Free;
-    end;
+  processStrings := TStringList.Create;
+  try
+    CommandToList(options.command, processStrings);
+    executable:= processStrings.Strings[0];
+    processStrings.Delete(0);
 
-    if exitCode = 0 then
+    for i := 1 to options.iteration do
     begin
-      Terminate(0);
-      Exit;
-    end;
+      logger.Info(Format('Iteration #%d of %d', [i, options.iteration]));
 
-    Sleep(1000 * options.waitSeconds);
+      logger.Info('Start executing ' + options.command);
+
+      if RunCommand(executable, processStrings.ToStringArray, outputString, [poNoConsole, poWaitOnExit, poStderrToOutPut]) then
+      begin
+        logger.info(Format('Successful after %d attempts', [i]));
+        Terminate(0);
+        Exit;
+      end
+      else
+      begin
+        logger.info(Format('Failed %d attempt: %s', [i, outputString]));
+      end;
+
+      logger.Info(Format('Sleeping for %d seconds', [options.waitSeconds]));
+      Sleep(1000 * options.waitSeconds);
+    end;
+  finally
+    processStrings.Free;
   end;
 
   // stop program loop
+  logger.Info(Format('Failed all the %d attempts',[options.iteration]));
   Terminate(1);
 end;
 
 constructor TRetryApplication.Create(TheOwner: TComponent);
 begin
   inherited Create(TheOwner);
+  logger := logManager.AddLog('retry');
   StopOnException:=True;
 end;
 
@@ -132,11 +163,13 @@ begin
   writeln('-h, --help                prints help information');
   writeln('-i, --iteration <count>   max number of iteration (default 2)');
   writeln('-w, --wait <seconds>      waiting time between iterations in seconds (default 10)');
+  writeln('-f, --logfile <log file>  log filename (will be added a timestamp string at the begin of the filename)');
   writeln('-c, --command <command>   command to be executed');
   writeln('');
   writeln('Examples:');
   writeln(s, ' -i 3 -w 10 -c my_command.exe');
   writeln(s, ' -i 3 -w 10 -c "my_command.exe param1 param2"');
+  writeln(s, ' -f ".' + DirectorySeparator + '-my-log.txt" -c my_command.exe');
 end;
 
 var
