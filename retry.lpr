@@ -17,7 +17,7 @@ uses
   {$ENDIF}
   Classes, SysUtils, CustApp,
   Process,
-  mLog, mLogPublishers;
+  mLog, mLogPublishers, mLazarusVersionInfo;
 
 type
   TRetryApplicationOptions = record
@@ -155,6 +155,7 @@ var
   s : String;
 begin
   writeln('RETRY - Retry command execution until successful');
+  writeln(Format('Version %s - https://github.com/DomenicoMammola/retry', [GetFileVersionAsString]));
   writeln('');
   s := ExtractFileName(ExeName);
   writeln('Usage: ', s, ' <parameters>');
